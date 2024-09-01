@@ -56,4 +56,3 @@ class Sphere():
                     return [True, T_zero]
         
         return [False]
-
