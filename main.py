@@ -285,8 +285,7 @@ def check_ray_intersection(ray_origin, ray_dir, last_hitpoint, last_hit_obj, obj
                                                     lights=lights,
                                                     pixel_pos=pixel_pos, 
                                                     return_gradient=False, 
-                                                    depth=depth-1,
-                                                    starting_depth = depth)
+                                                    depth=depth-1)
 
             # cheecking if ray didn't go to void
             if reflected != None:
