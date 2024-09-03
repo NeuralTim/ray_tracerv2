@@ -6,7 +6,9 @@ from Vec3d import Vec3
 from cam import Cam
 from materials import Materials
 from sphere import Sphere
+from plane import Plane
 from light import Light
+from PIL import Image
 
 # camera, objects, intersection funcs for them, materials
 
@@ -39,6 +41,7 @@ def generate_rays(resolution, FOV):
     return rays
 
 def equator(obj, hit_point, lights, treshold):
+    # function checks, if given point is closer to natural shadow border than hardcoded treshold
     normal = hit_point.subtract_R(obj.origin)
     normal.normalize()
     vec = lights.pos.subtract_R(obj.origin)
@@ -49,19 +52,32 @@ def equator(obj, hit_point, lights, treshold):
     return 1
 
 def calculate_reflected_ray_dir(ray_dir, normal, reverse_direction):
+    # calculates direction of perfectly reflected ray
+
+    # normalization
     ray_dir.normalize()
+
+    # reversing direction if needed
     if reverse_direction:
-        zero = Vec3([0, 0, 0])
-        ray_dir = zero.subtract_R(ray_dir)
+        ray_dir = ray_dir.mult_R(-1)
+    
+    # normalization
     normal.normalize()
 
+    # t in length of vector projected on normal
     t = ray_dir.dot_R(normal)
 
-    normal.mult(2*t)
+    # creating new vector pointing in the same direction as normal with length of 2*t
+    new_normal = normal.mult_R(2*t)
 
-    return normal.subtract_R(ray_dir)
+    # subtracting (probably reversed) direction of starting ray from new vector
+    return new_normal.subtract_R(ray_dir)
 
-def apply_random_offset_to_ray(angle_range, ray_dir):
+
+def apply_random_offset_to_ray_for_sphere(angle_range, ray_dir):
+    # fuction for spheres only -> rotates normal vector by some samll angles
+
+    # calculating offsets angles
     x_angle = r.randint(-int(angle_range)*100, int(angle_range)*100)/200
     y_angle = r.randint(-int(angle_range)*100, int(angle_range)*100)/200
     z_angle = r.randint(-int(angle_range)*100, int(angle_range)*100)/200
@@ -73,8 +89,18 @@ def apply_random_offset_to_ray(angle_range, ray_dir):
     return sample
 
 
+def apply_random_offset_to_ray_for_plane(point, ratio):
+    # function for planes only -> adds some small random number to hitpoint coordinates
+    
+    # calculating offsets
+    x_off = r.randint(-ratio*100, ratio*100)/200
+    y_off = r.randint(-ratio*100, ratio*100)/200
+    z_off = r.randint(-ratio*100, ratio*100)/200
+
+    return Vec3([point.x+x_off, point.y+y_off, point.z+z_off])
 
 def lighting(camera, light, shadowness, obj, hit_point, scene_ambient):
+    # calculates actual colour of pixel
 
     # defining shinines by reading in object materials
     shinines = obj.materials.shinines
@@ -83,8 +109,14 @@ def lighting(camera, light, shadowness, obj, hit_point, scene_ambient):
     ambient = obj.materials.ambient
 
     # calculating diffuse component
-    obj_normal = hit_point.subtract_R(obj.origin)
-    obj_normal.normalize()
+    
+    # setting correct normals
+    if obj.id == 'sphere':
+        obj_normal = hit_point.subtract_R(obj.origin)
+        obj_normal.normalize()
+    else:
+        obj_normal = obj.surface_normal
+        obj_normal.normalize()
 
     hit_point_to_ligth = light.pos.subtract_R(hit_point)
     hit_point_to_ligth.normalize()
@@ -103,12 +135,8 @@ def lighting(camera, light, shadowness, obj, hit_point, scene_ambient):
     # specular component
 
     direction_to_light = light.pos.subtract_R(hit_point)
-    direction_to_light.normalize()
 
-    t = direction_to_light.dot_R(obj_normal)
-    obj_normal.mult(2*t)
-
-    reflected_light_direction = obj_normal.subtract_R(direction_to_light)
+    reflected_light_direction = calculate_reflected_ray_dir(ray_dir=direction_to_light, normal=obj_normal, reverse_direction=True)
 
     direction_to_cam = camera.pos.subtract_R(hit_point)
     direction_to_cam.normalize()
@@ -129,30 +157,32 @@ def lighting(camera, light, shadowness, obj, hit_point, scene_ambient):
 
 
 def samples_for_soft_shadows(obj, hit_point, lights, number_of_samples, normal_factor):
-
-    # checking if point is near to shadow line of object itself
-    is_on_equator = equator(obj, hit_point, lights, 0.1)
-    # if it is, then don't do sampling
-    if is_on_equator == 0:
-        return [hit_point]*number_of_samples
-
-    # calculating normal and its length
-    normal = hit_point.subtract_R(obj.origin)
-    normal_length = obj.origin.dist(hit_point)
-
     # generates points which are random rotations of normal vector around sphere origin
     samples = []
-
-    # calculating how much in all directions vector can move (bigger sphere --> less movement, smaller one --> more movement)
-    angle_range = normal_factor/normal_length
-
-    for i in range(number_of_samples):
-
-        # generating all 3 axis rotation angles
-        sample = apply_random_offset_to_ray(angle_range=angle_range, ray_dir=normal)
-
-        # adding origin to vector
-        samples.append(sample.add_R(obj.origin))
+    # do this only for sphere checker
+    if obj.id == 'sphere':
+        # checking if point is near to shadow line of object itself
+        is_on_equator = equator(obj, hit_point, lights, 0.1)
+        # if it is, then don't do sampling
+        if is_on_equator == 0:
+            return [hit_point]*number_of_samples
+        # calculating normal and its length
+        normal = hit_point.subtract_R(obj.origin)
+        normal_length = obj.origin.dist(hit_point)
+        
+        # calculating how much in all directions vector can move (bigger sphere --> less movement, smaller one --> more movement)
+        angle_range = normal_factor/normal_length
+        for i in range(number_of_samples):
+            # generating all 3 axis rotation angles
+            sample = apply_random_offset_to_ray_for_sphere(angle_range=angle_range, ray_dir=normal)
+            # adding origin to vector
+            samples.append(sample.add_R(obj.origin))
+    else:
+        for i in range(number_of_samples):
+            # adding some small random numbers to coordinates of hitpoint
+            sample = apply_random_offset_to_ray_for_plane(point=hit_point, ratio=0.2)
+        
+            samples.append(sample)
 
     return samples
 
@@ -166,16 +196,18 @@ def compute_shadows(obj, objects, samples, lights):
         ray_dir = lights.pos.subtract_R(hit_point)
         # normalization of length
         ray_dir.normalize()
-
-        # checking if ray collide with sphere itself in the side alredy covered by shadow of itself
-        did_hit = obj.intersect(ray_dir=ray_dir, ray_origin=hit_point, nearer=False)
-        if did_hit[0]:
-            # calculating and normalizing vector from considered point on sphere to point which creates shadow on this spot
-            dir_from_hit_point_to_shadowing_point = did_hit[1].subtract_R(hit_point)
-            dir_from_hit_point_to_shadowing_point.normalize()
-            # checking if this vector points towards light source (means that object oclude itself by is own wall)
-            if ray_dir.dot_R(dir_from_hit_point_to_shadowing_point) > 0:
-                return 1
+        
+        # do this only for sphere checker
+        if obj.id == 'sphere':
+            # checking if ray collide with sphere itself in the side alredy covered by shadow of itself
+            did_hit = obj.intersect(ray_dir=ray_dir, ray_origin=hit_point, nearer=False)
+            if did_hit[0]:
+                # calculating and normalizing vector from considered point on sphere to point which creates shadow on this spot
+                dir_from_hit_point_to_shadowing_point = did_hit[1].subtract_R(hit_point)
+                dir_from_hit_point_to_shadowing_point.normalize()
+                # checking if this vector points towards light source (means that object oclude itself by is own wall)
+                if ray_dir.dot_R(dir_from_hit_point_to_shadowing_point) > 0:
+                    return 1
         # variable for increesing number of points in shadow
         in_shadow = False
         # iterating thru all objects, except collider object itself
@@ -254,27 +286,49 @@ def check_ray_intersection(ray_origin, ray_dir, last_hitpoint, last_hit_obj, obj
 
         # checking if any collision made it thru last test
         if len(collisions1) > 0:
-
             # sorting collisions by distance to camera
             collisions1 = sorted(collisions1, key=lambda x: x[1])
 
-            # creating samples for making soft shadows
-            samples = samples_for_soft_shadows(obj=collisions1[0][0], hit_point=collisions1[0][2], lights=light, number_of_samples=15, normal_factor=8)
-            
-            # computing shadows which occured by object's occlusion and passing walue of shadow for pixel to next funciton
-            shadow_value = compute_shadows(obj=collisions1[0][0], objects=objects, samples=samples, lights=lights)
+            if collisions1[0][0].id == 'sphere':
+                # creating samples for making soft shadows
+                samples = samples_for_soft_shadows(obj=collisions1[0][0], hit_point=collisions1[0][2], lights=light, number_of_samples=15, normal_factor=8)
 
-            # computing lighting for pixel using phong's lighting model with respect to shadow value of pixel
-            pixel_colour = lighting(camera=camera, light=lights, shadowness=shadow_value, obj=collisions1[0][0], hit_point=collisions1[0][2], scene_ambient=0.2)
-            
-            # multipling colour of pixel by 1-refectivity to check how much of light was actually absorbed
-            pixel_colour.mult(1-collisions1[0][0].materials.reflectivity)
+                # computing shadows which occured by object's occlusion and passing walue of shadow for pixel to next funciton
+                shadow_value = compute_shadows(obj=collisions1[0][0], objects=objects, samples=samples, lights=lights)
 
-            # computing direction for reflected ray
-            new_ray_dir = calculate_reflected_ray_dir(normal=collisions1[0][2].subtract_R(collisions1[0][0].origin), ray_dir=ray_dir, reverse_direction=True)
+                # computing lighting for pixel using phong's lighting model with respect to shadow value of pixel
+                pixel_colour = lighting(camera=camera, light=lights, shadowness=shadow_value, obj=collisions1[0][0], hit_point=collisions1[0][2], scene_ambient=0.2)
+
+                # multipling colour of pixel by 1-refectivity to check how much of light was actually absorbed
+                pixel_colour.mult(1-collisions1[0][0].materials.reflectivity)
+
+                # computing direction for reflected ray
+                new_ray_dir = calculate_reflected_ray_dir(normal=collisions1[0][2].subtract_R(collisions1[0][0].origin), ray_dir=ray_dir, reverse_direction=True)
+
+                # perturbating direction with respect to roughness of object
+                new_ray_dir = apply_random_offset_to_ray_for_sphere(angle_range=90*collisions1[0][0].materials.roughness, ray_dir=new_ray_dir)
             
-            # perturbating direction with respect to roughness of object
-            new_ray_dir = apply_random_offset_to_ray(angle_range=90*collisions1[0][0].materials.roughness, ray_dir=new_ray_dir)
+            else:
+                # checking current pixel base colour by calling chess_board method on it's position
+                collisions1[0][0].materials.colour = collisions1[0][0].chess_board(hit_point=collisions1[0][2])
+
+                 # creating samples for making soft shadows
+                samples = samples_for_soft_shadows(obj=collisions1[0][0], hit_point=collisions1[0][2], lights=light, number_of_samples=15, normal_factor=8)
+
+                # computing shadows which occured by object's occlusion and passing walue of shadow for pixel to next funciton
+                shadow_value = compute_shadows(obj=collisions1[0][0], objects=objects, samples=samples, lights=lights)
+
+                # computing lighting for pixel using phong's lighting model with respect to shadow value of pixel 
+                pixel_colour = lighting(camera=camera, light=lights, shadowness=shadow_value, obj=collisions1[0][0], hit_point=collisions1[0][2], scene_ambient=0.2)
+
+                # multipling colour of pixel by 1-refectivity to check how much of light was actually absorbed
+                pixel_colour.mult(1-collisions1[0][0].materials.reflectivity)
+
+                # computing direction for reflected ray
+                new_ray_dir = calculate_reflected_ray_dir(normal=collisions1[0][0].surface_normal, ray_dir=ray_dir, reverse_direction=True)
+
+                # perturbating direction with respect to roughness of object
+                new_ray_dir = apply_random_offset_to_ray_for_sphere(angle_range=90*collisions1[0][0].materials.roughness, ray_dir=new_ray_dir)
 
             # recursive checking next collisions of reflected rays
             reflected = check_ray_intersection(ray_origin=collisions1[0][2],
@@ -344,10 +398,26 @@ def trace(rays, camera, objects, lights, depth):
     print('\n')
     print('$ Image rendering => Done $')
     print()
-    print(f'Render time: {round(b-a, 2)} seconds')
+    t = int(b-a)
+    minutes = t//60
+    seconds = t%60
+    print(f'Render time: {minutes} minutes {seconds} seconds')
     plt.imshow(image)
     plt.show()
 
+    # data normalization from 0 to 1
+    min_val = image.min()
+    max_val = image.max()
+    normalized_rgb_data = (image - min_val) / (max_val - min_val)
+
+    # scaling data from 0 to 255
+    rgb_data_scaled = np.clip(normalized_rgb_data * 255, 0, 255).astype(np.uint8)
+
+    # creating image from RGB data
+    img = Image.fromarray(rgb_data_scaled, 'RGB')
+
+    # writing image to file
+    img.save('two_balls_render.png')
 ########################################################################################################################
 ########################################################################################################################
 ########################################################################################################################
@@ -364,15 +434,16 @@ print('''          _______     __________   ___        _   ___________     _____
          |_|     \\_\\ |__________| |_|       \\__| |___________/   |__________| |_|     \\_\\''')
 print()
 print('#### Initializing objects... #####')
-camera = Cam(pos=Vec3([0, 0, 0]), cam_normal=Vec3([0, 0, 1]), FOV=90, near_plane=1, far_plane=20, resolution=[400, 300])
-light = Light(position=Vec3([30, 20, -50]), strenght=1, colour=Vec3([1, 1, 1]))
-s1 = Sphere(origin=Vec3([-1.5, 0, 5]), radius=1.4, materials=Materials(colour=Vec3([1, 1, 1]), roughnes=0.3, reflectivity=0.7, diffuse=0.5, shinines=50, specular=0.9, ambient=0.1))
-s2 = Sphere(origin=Vec3([1.5, 0, 5]), radius=1.4, materials=Materials(colour=Vec3([1, 0, 0]), roughnes=0, reflectivity=0.7, diffuse=0.5, shinines=50, specular=0.9, ambient=0.1))
-objects = [s1, s2]
+camera = Cam(pos=Vec3([0, 0, 0]), cam_normal=Vec3([0, 0, 1]), FOV=90, near_plane=1, far_plane=20, resolution=[150, 100])
+light = Light(position=Vec3([30, 20, -50]), strenght=2, colour=Vec3([1, 1, 1]))
+floor = Plane(surface_normal=Vec3([0, 1, 0]), distance_from_0_0_0=-1.5, materials=Materials(colour=Vec3([1, 0, 1]), roughnes=0.0, reflectivity=0.7, diffuse=0.3, shinines=10, specular=0.6, ambient=0.2))
+s1 = Sphere(origin=Vec3([-1.5, 0, 5]), radius=1.5, materials=Materials(colour=Vec3([1, 1, 1]), roughnes=0.05, reflectivity=0.7, diffuse=0.5, shinines=50, specular=0.9, ambient=0.1))
+s2 = Sphere(origin=Vec3([1.5, 0, 5]), radius=1.5, materials=Materials(colour=Vec3([1, 0, 0]), roughnes=0, reflectivity=0.7, diffuse=0.5, shinines=50, specular=0.9, ambient=0.1))
+objects = [s1, s2, floor]
 print('$ Initializing objects => Done $')
 print()
 print('#### Generating basic rays set... ####')
 rays = generate_rays(camera.resolution, camera.FOV)
 print('$ Rays set generating => Done $')
 print()
-trace(rays=rays, camera=camera, objects=objects, lights=light, depth=3)
+trace(rays=rays, camera=camera, objects=objects, lights=light, depth=2)

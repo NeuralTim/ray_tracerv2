@@ -4,6 +4,7 @@ from Vec3d import Vec3
 
 class Sphere():
     def __init__(self, origin, radius, materials) -> None:
+        self.id = 'sphere'
         self.origin = origin        # in Vec3
         self.radius = radius
         self.materials = materials  # described as an object of class Materials
